@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import random
 import re
 import string
@@ -23,9 +24,9 @@ provider_index = 0
 
 def _config(mail_config: dict) -> dict:
     return {
-        "request_timeout": float(mail_config.get("request_timeout") or 15),
+        "request_timeout": float(mail_config.get("request_timeout") or 30),
         "wait_timeout": float(mail_config.get("wait_timeout") or 30),
-        "wait_interval": float(mail_config.get("wait_interval") or 3),
+        "wait_interval": float(mail_config.get("wait_interval") or 2),
         "user_agent": str(mail_config.get("user_agent") or "Mozilla/5.0"),
     }
 
@@ -145,6 +146,19 @@ def _extract_code(message: dict[str, Any]) -> str | None:
     return None
 
 
+def _message_tracking_ref(message: dict[str, Any]) -> str:
+    provider = str(message.get("provider") or "").strip()
+    mailbox = str(message.get("mailbox") or "").strip()
+    message_id = str(message.get("message_id") or "").strip()
+    if message_id:
+        return f"id:{provider}:{mailbox}:{message_id}"
+    received_at = message.get("received_at")
+    received_value = received_at.isoformat() if isinstance(received_at, datetime) else str(received_at or "")
+    content = "\n".join(str(message.get(key) or "") for key in ("subject", "sender", "text_content", "html_content"))
+    digest = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+    return f"content:{provider}:{mailbox}:{received_value}:{digest}"
+
+
 class BaseMailProvider:
     name = "unknown"
 
@@ -164,7 +178,23 @@ class BaseMailProvider:
         return None
 
     def wait_for_code(self, mailbox: dict[str, Any]) -> str | None:
-        return self.wait_for(mailbox, _extract_code)
+        seen_value = mailbox.setdefault("_seen_code_message_refs", [])
+        if not isinstance(seen_value, list):
+            seen_value = []
+            mailbox["_seen_code_message_refs"] = seen_value
+        seen_refs = {str(item) for item in seen_value}
+
+        def extract_unseen_code(message: dict[str, Any]) -> str | None:
+            ref = _message_tracking_ref(message)
+            if ref in seen_refs:
+                return None
+            code = _extract_code(message)
+            if code:
+                seen_value.append(ref)
+                seen_refs.add(ref)
+            return code
+
+        return self.wait_for(mailbox, extract_unseen_code)
 
     def close(self) -> None:
         pass

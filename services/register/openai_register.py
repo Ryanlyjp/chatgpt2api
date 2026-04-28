@@ -25,14 +25,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 base_dir = Path(__file__).resolve().parent
 config = {
     "mail": {
-        "request_timeout": 15,
+        "request_timeout": 30,
         "wait_timeout": 30,
-        "wait_interval": 3,
+        "wait_interval": 2,
         "providers": [],
     },
     "proxy": "",
-    "total": 20000,
-    "threads": 64,
+    "total": 10,
+    "threads": 3,
 }
 register_config_file = base_dir.parents[1] / "data" / "register.json"
 try:
@@ -549,7 +549,10 @@ class PlatformRegistrar:
                 raise RuntimeError("独立登录等待验证码超时")
             resp, reason = validate_otp(self.session, self.device_id, code)
             if resp is None or resp.status_code != 200:
-                raise RuntimeError(reason or "独立登录验证码校验失败")
+                print("独立登录验证码校验失败响应:", resp.text if resp is not None else "None")
+                data = _response_json(resp) if resp is not None else {}
+                message = str((data.get("error") or {}).get("message") or data.get("message") or "").strip()
+                raise RuntimeError(reason or f"独立登录验证码校验失败{': ' + message if message else ''}")
             otp_payload = _response_json(resp)
             continue_url = str(otp_payload.get("continue_url") or continue_url).strip()
             step(index, "独立登录验证码校验完成")
