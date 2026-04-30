@@ -555,6 +555,33 @@ class TempMailSelfProvider(BaseMailProvider):
         item = max(messages, key=lambda value: ((_parse_received_at(value.get("received_at") or value.get("receivedAt") or value.get("created_at") or value.get("createdAt")) or datetime.fromtimestamp(0, tz=timezone.utc)).timestamp(), str(value.get("id") or "")))
         return {"provider": self.name, "mailbox": str(mailbox.get("address") or ""), "message_id": str(item.get("id") or ""), "subject": str(item.get("subject") or ""), "sender": str(item.get("sender") or item.get("from") or ""), "text_content": str(item.get("body_text") or item.get("text_content") or ""), "html_content": str(item.get("body_html") or item.get("html_content") or ""), "received_at": _parse_received_at(item.get("received_at") or item.get("receivedAt") or item.get("created_at") or item.get("createdAt")), "raw": item}
 
+    def wait_for_code(self, mailbox: dict[str, Any]) -> str | None:
+        mailbox_id = str(mailbox.get("mailbox_id") or "").strip()
+        if not mailbox_id:
+            raise RuntimeError("TempMailSelf 缺少 mailbox_id")
+        seen_value = mailbox.setdefault("_seen_code_message_refs", [])
+        if not isinstance(seen_value, list):
+            seen_value = []
+            mailbox["_seen_code_message_refs"] = seen_value
+        seen_refs = {str(item) for item in seen_value}
+        deadline = time.monotonic() + self.conf["wait_timeout"]
+        while time.monotonic() < deadline:
+            try:
+                data = self._request("GET", f"/api/mailboxes/{mailbox_id}/otp/latest", expected=(200, 404, 422))
+            except Exception:
+                data = {}
+            otp_data = data.get("otp") if isinstance(data, dict) else None
+            if isinstance(otp_data, dict):
+                code = str(otp_data.get("code") or "").strip()
+                email_id = str(otp_data.get("email_id") or "").strip()
+                ref = f"otp:{mailbox_id}:{email_id}"
+                if code and ref not in seen_refs:
+                    seen_value.append(ref)
+                    seen_refs.add(ref)
+                    return code
+            time.sleep(max(0.2, self.conf["wait_interval"]))
+        return None
+
     def close(self) -> None:
         self.session.close()
 
