@@ -1060,6 +1060,120 @@ class YydsMailProvider(BaseMailProvider):
         self.session.close()
 
 
+class TempMailSelfProvider(BaseMailProvider):
+    name = "tempmail_self"
+
+    def __init__(self, entry: dict, conf: dict):
+        super().__init__(conf, str(entry.get("provider_ref") or ""))
+        self.api_base = str(entry["api_base"]).rstrip("/")
+        self.api_key = str(entry["api_key"]).strip()
+        self.domain = _normalize_string_list(entry.get("domain"))
+        self.session = _create_session(conf)
+        self.session.headers.update(
+            {
+                "User-Agent": conf["user_agent"],
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+        )
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        params: dict | None = None,
+        payload: dict | None = None,
+        expected: tuple[int, ...] = (200, 201, 204),
+    ):
+        resp = self.session.request(
+            method.upper(),
+            f"{self.api_base}{path}",
+            params=params,
+            json=payload,
+            timeout=self.conf["request_timeout"],
+            verify=False,
+        )
+        if resp.status_code not in expected:
+            raise RuntimeError(f"TempMailSelf 请求失败: {method} {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
+        if resp.status_code == 204 or not resp.text.strip():
+            return {}
+        try:
+            return resp.json()
+        except Exception as exc:
+            raise RuntimeError(f"TempMailSelf {method} {path} 返回非 JSON: body={resp.text[:300]}") from exc
+
+    def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.domain:
+            payload["domain"] = _next_domain(self.domain)
+        data = self._request("POST", "/api/mailboxes", payload=payload or None)
+        mailbox = data.get("mailbox") if isinstance(data.get("mailbox"), dict) else data
+        mailbox_id = str(mailbox.get("id") or "").strip()
+        address = str(mailbox.get("full_address") or mailbox.get("address") or "").strip()
+        if not mailbox_id or not address:
+            raise RuntimeError("TempMailSelf 缺少 mailbox.id 或 full_address")
+        return {"provider": self.name, "provider_ref": self.provider_ref, "address": address, "mailbox_id": mailbox_id}
+
+    def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
+        mailbox_id = str(mailbox.get("mailbox_id") or "").strip()
+        if not mailbox_id:
+            raise RuntimeError("TempMailSelf 缺少 mailbox_id")
+        data = self._request("GET", f"/api/mailboxes/{mailbox_id}/emails", params={"page": 1, "size": 10})
+        items = data.get("data") or data.get("emails") or []
+        messages = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        if not messages:
+            return None
+        item = max(
+            messages,
+            key=lambda value: (
+                (_parse_received_at(value.get("received_at") or value.get("receivedAt") or value.get("created_at") or value.get("createdAt")) or datetime.fromtimestamp(0, tz=timezone.utc)).timestamp(),
+                str(value.get("id") or ""),
+            ),
+        )
+        return {
+            "provider": self.name,
+            "mailbox": str(mailbox.get("address") or ""),
+            "message_id": str(item.get("id") or ""),
+            "subject": str(item.get("subject") or ""),
+            "sender": str(item.get("sender") or item.get("from") or ""),
+            "text_content": str(item.get("body_text") or item.get("text_content") or ""),
+            "html_content": str(item.get("body_html") or item.get("html_content") or ""),
+            "received_at": _parse_received_at(item.get("received_at") or item.get("receivedAt") or item.get("created_at") or item.get("createdAt")),
+            "raw": item,
+        }
+
+    def wait_for_code(self, mailbox: dict[str, Any]) -> str | None:
+        mailbox_id = str(mailbox.get("mailbox_id") or "").strip()
+        if not mailbox_id:
+            raise RuntimeError("TempMailSelf 缺少 mailbox_id")
+        seen_value = mailbox.setdefault("_seen_code_message_refs", [])
+        if not isinstance(seen_value, list):
+            seen_value = []
+            mailbox["_seen_code_message_refs"] = seen_value
+        seen_refs = {str(item) for item in seen_value}
+        deadline = time.monotonic() + self.conf["wait_timeout"]
+        while time.monotonic() < deadline:
+            try:
+                data = self._request("GET", f"/api/mailboxes/{mailbox_id}/otp/latest", expected=(200, 404, 422))
+            except Exception:
+                data = {}
+            otp_data = data.get("otp") if isinstance(data, dict) else None
+            if isinstance(otp_data, dict):
+                code = str(otp_data.get("code") or "").strip()
+                email_id = str(otp_data.get("email_id") or "").strip()
+                ref = f"otp:{mailbox_id}:{email_id}"
+                if code and ref not in seen_refs:
+                    seen_value.append(ref)
+                    seen_refs.add(ref)
+                    return code
+            time.sleep(max(0.2, self.conf["wait_interval"]))
+        return None
+
+    def close(self) -> None:
+        self.session.close()
+
+
 OUTLOOK_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 OUTLOOK_GRAPH_MESSAGES_URL = "https://graph.microsoft.com/v1.0/me/messages"
 OUTLOOK_GRAPH_SCOPE = "offline_access https://graph.microsoft.com/Mail.Read"
@@ -1418,6 +1532,8 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
         return InbucketMailProvider(entry, conf)
     if entry["type"] == "yyds_mail":
         return YydsMailProvider(entry, conf)
+    if entry["type"] == "tempmail_self":
+        return TempMailSelfProvider(entry, conf)
     if entry["type"] == "outlook_token":
         return OutlookTokenProvider(entry, conf)
     raise RuntimeError(f"不支持的 mail.provider: {entry['type']}")
