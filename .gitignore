@@ -33,3 +33,6 @@ git_cache/
 loginwithpassword_*/
 logwithemailverifycode_*/
 test_batch_output/
+
+# Local agent execution log
+progress.md
