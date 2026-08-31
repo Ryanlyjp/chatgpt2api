@@ -5,6 +5,7 @@ import { ChevronDown, FileArchive, FileText, KeyRound, ListChecks, type LucideIc
 
 import { Card, CardContent } from "@/components/ui/card";
 import webConfig from "@/constants/common-env";
+import { fetchModels } from "@/lib/api";
 import { getStoredAuthSession } from "@/store/auth";
 
 type ParamRow = [string, string, string];
@@ -40,8 +41,9 @@ const docs: ApiDoc[] = [
     path: "/v1/chat/completions",
     icon: FileText,
     input: [
-      ["model", "string", "模型名，例如 gpt-5-mini，也可用于图片兼容场景。"],
+      ["model", "string", "模型名，例如 gpt-5.6-luna，也可用于图片兼容场景。"],
       ["messages", "array", "OpenAI 兼容消息数组。"],
+      ["reasoning_effort", "string", "可选，none、low、medium、high、xhigh 或 max。"],
       ["stream", "boolean", "可选，是否流式返回。"],
       ["n", "number", "可选，图片兼容场景会解析为生成数量。"],
     ],
@@ -53,7 +55,7 @@ const docs: ApiDoc[] = [
     example: (baseUrl: string, key: string) => `curl ${baseUrl}/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${key}" \\
-  -d '{"model":"gpt-5-mini","messages":[{"role":"user","content":"你好"}]}'`,
+  -d '{"model":"gpt-5.6-sol","reasoning_effort":"high","messages":[{"role":"user","content":"你好"}]}'`,
   },
   {
     title: "Responses",
@@ -63,6 +65,7 @@ const docs: ApiDoc[] = [
     input: [
       ["model", "string", "模型名。"],
       ["input", "string | array | object", "用户输入，图片生成会从中解析提示词。"],
+      ["reasoning", "object", "可选，使用 effort 设置推理强度；Team Sol Pro 使用 mode: pro。"],
       ["tools", "array", "可选，Responses 工具定义。"],
       ["stream", "boolean", "可选，是否流式返回。"],
     ],
@@ -74,7 +77,7 @@ const docs: ApiDoc[] = [
     example: (baseUrl: string, key: string) => `curl ${baseUrl}/responses \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${key}" \\
-  -d '{"model":"gpt-5-mini","input":"生成一张未来城市图片"}'`,
+  -d '{"model":"gpt-5.6-sol","reasoning":{"mode":"pro","effort":"medium"},"input":"审查这个关键设计决策"}'`,
   },
   {
     title: "搜索",
@@ -215,8 +218,6 @@ const docs: ApiDoc[] = [
   },
 ];
 
-const usableModels = ["gpt-image-2", "codex-gpt-image-2", "auto", "gpt-5", "gpt-5-1", "gpt-5-2", "gpt-5-3", "gpt-5-3-mini", "gpt-5-mini"];
-
 function ParamTable({ rows }: { rows: ParamRow[] }) {
   return (
     <div className="overflow-hidden rounded-lg border border-stone-200">
@@ -244,6 +245,7 @@ function ParamTable({ rows }: { rows: ParamRow[] }) {
 
 export function ApiDocsCard() {
   const [authKey, setAuthKey] = useState("");
+  const [usableModels, setUsableModels] = useState<string[]>([]);
   const serviceBaseUrl = webConfig.apiUrl.replace(/\/$/, "") || (typeof window !== "undefined" ? window.location.origin : "");
   const openAIBaseUrl = `${serviceBaseUrl}/v1`;
   const displayKey = authKey || "<当前密钥>";
@@ -253,6 +255,23 @@ export function ApiDocsCard() {
     void getStoredAuthSession().then((session) => {
       if (active) setAuthKey(session?.key || "");
     });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetchModels()
+      .then((result) => {
+        if (!active) return;
+        setUsableModels(
+          (Array.isArray(result.data) ? result.data : [])
+            .map((item) => String(item.id || "").trim())
+            .filter((model, index, models) => model && models.indexOf(model) === index),
+        );
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
     };
@@ -290,14 +309,16 @@ export function ApiDocsCard() {
           </div>
         </div>
 
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-stone-600">常用模型，也可请求 /v1/models 获取</div>
-          <div className="flex flex-wrap gap-2">
-            {usableModels.map((model) => (
-              <span key={model} className="rounded-md border border-stone-200 bg-white px-2 py-1 font-mono text-xs text-stone-700">{model}</span>
-            ))}
+        {usableModels.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-stone-600">当前可用模型</div>
+            <div className="flex flex-wrap gap-2">
+              {usableModels.map((model) => (
+                <span key={model} className="rounded-md border border-stone-200 bg-white px-2 py-1 font-mono text-xs text-stone-700">{model}</span>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="space-y-3">
           {docs.map((item) => {

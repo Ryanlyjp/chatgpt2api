@@ -299,6 +299,7 @@ class ConversationRequest:
     prompt: str = ""
     messages: list[dict[str, Any]] | None = None
     thinking_effort: str = ""
+    reasoning_mode: str = ""
     images: list[str] | None = None
     n: int = 1
     size: str | None = None
@@ -689,15 +690,24 @@ def conversation_events(
     size: str | None = None,
     quality: str = "auto",
     thinking_effort: str = "",
+    reasoning_mode: str = "",
 ) -> Iterator[dict[str, Any]]:
+    from services.model_service import model_catalog_service
+
     normalized = normalize_messages(messages or ([{"role": "user", "content": prompt}] if prompt else []))
     image_model = is_supported_image_model(model)
     history_text = "" if image_model else assistant_history_text(normalized)
     history_messages = [] if image_model else assistant_history_messages(normalized)
     final_prompt = prompt_with_global_system(build_image_prompt(prompt, size, quality)) if image_model else prompt
+    upstream_model = model if image_model else model_catalog_service.upstream_model_for(
+        model,
+        getattr(backend, "access_token", ""),
+        thinking_effort,
+        reasoning_mode,
+    )
     payloads = backend.stream_conversation(
         messages=normalized,
-        model=model,
+        model=upstream_model,
         prompt=final_prompt,
         images=images if image_model else None,
         system_hints=["picture_v2"] if image_model else None,
@@ -706,8 +716,15 @@ def conversation_events(
     yield from iter_conversation_payloads(payloads, history_text, history_messages)
 
 
-def text_backend(model: str = "auto") -> OpenAIBackendAPI:
-    return OpenAIBackendAPI(access_token=account_service.get_text_access_token(model=model))
+def text_backend(
+    model: str = "auto",
+    thinking_effort: str = "",
+    reasoning_mode: str = "",
+) -> OpenAIBackendAPI:
+    from services.model_service import model_catalog_service
+
+    routing_model = model_catalog_service.routing_model_for(model, thinking_effort, reasoning_mode)
+    return OpenAIBackendAPI(access_token=account_service.get_text_access_token(model=routing_model))
 
 
 def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) -> Iterator[str]:
@@ -728,6 +745,7 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                 model=request.model,
                 prompt=request.prompt,
                 thinking_effort=request.thinking_effort,
+                reasoning_mode=request.reasoning_mode,
             ):
                 if event.get("type") != "conversation.delta":
                     continue
@@ -745,9 +763,15 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                     token = refreshed_token
                 else:
                     account_service.remove_invalid_token(token, "text_stream")
+                    from services.model_service import model_catalog_service
+
                     token = account_service.get_text_access_token(
                         excluded_tokens=set(attempted_tokens),
-                        model=request.model,
+                        model=model_catalog_service.routing_model_for(
+                            request.model,
+                            request.thinking_effort,
+                            request.reasoning_mode,
+                        ),
                     )
                 if token:
                     continue

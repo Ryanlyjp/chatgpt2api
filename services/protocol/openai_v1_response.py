@@ -47,11 +47,13 @@ RESPONSE_CONTENT_PART_TYPES = {"text", "input_text", "output_text", "image_url",
 
 def normalize_thinking_effort(value: object) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"", "none"}:
+    if not normalized:
         return ""
-    if normalized in {"low", "medium", "high"}:
+    if normalized in {"none", "low", "medium", "high", "max"}:
         return normalized
-    if normalized in {"xhigh", "extended"}:
+    if normalized == "xhigh":
+        return "xhigh"
+    if normalized == "extended":
         return "extended"
     return ""
 
@@ -65,6 +67,22 @@ def thinking_effort_from_body(body: dict[str, Any]) -> str:
     if "reasoning_effort" in body:
         return normalize_thinking_effort(body.get("reasoning_effort"))
     return ""
+
+
+def reasoning_settings_from_body(body: dict[str, Any]) -> tuple[str, str]:
+    effort = thinking_effort_from_body(body)
+    reasoning = body.get("reasoning")
+    mode = str(reasoning.get("mode") or "").strip().lower() if isinstance(reasoning, dict) else ""
+    if not mode or mode == "standard":
+        return effort, ""
+    if mode != "pro":
+        raise HTTPException(status_code=400, detail={"error": f"unsupported reasoning mode: {mode}"})
+    if effort in {"none", "low"}:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "reasoning.mode=pro requires medium, high, xhigh, or max effort"},
+        )
+    return effort or "medium", "pro"
 
 
 def is_text_response_request(body: dict[str, Any]) -> bool:
@@ -296,17 +314,27 @@ def text_response_parts(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
     return model, messages
 
 
-def stream_text_response(backend, body: dict[str, Any], messages: list[dict[str, Any]] | None = None) -> Iterator[dict[str, Any]]:
+def stream_text_response(
+    backend,
+    body: dict[str, Any],
+    messages: list[dict[str, Any]] | None = None,
+    thinking_effort: str = "",
+    reasoning_mode: str = "",
+) -> Iterator[dict[str, Any]]:
     model = str(body.get("model") or "auto").strip() or "auto"
     messages = messages if messages is not None else messages_from_input(body.get("input"), body.get("instructions"))
-    thinking_effort = thinking_effort_from_body(body)
     response_id = f"resp_{uuid.uuid4().hex}"
     item_id = f"msg_{uuid.uuid4().hex}"
     created = int(time.time())
     full_text = ""
     yield response_created(response_id, model, created)
     yield {"type": "response.output_item.added", "output_index": 0, "item": text_output_item("", item_id, "in_progress")}
-    request = ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)
+    request = ConversationRequest(
+        model=model,
+        messages=messages,
+        thinking_effort=thinking_effort,
+        reasoning_mode=reasoning_mode,
+    )
     for delta in stream_text_deltas(backend, request):
         full_text += delta
         yield {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": delta}
@@ -416,10 +444,17 @@ def response_events(body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         if has_web_search_tool(body) and not has_unsupported_response_tools(body):
             yield from stream_web_search_response(body, messages)
             return
+        thinking_effort, reasoning_mode = reasoning_settings_from_body(body)
         key = cache_key(body, messages, stream=bool(body.get("stream")))
         yield from chat_completion_cache.get_or_compute_stream(
             key,
-            lambda: stream_text_response(text_backend(model), body, messages),
+            lambda: stream_text_response(
+                text_backend(model, thinking_effort, reasoning_mode),
+                body,
+                messages,
+                thinking_effort,
+                reasoning_mode,
+            ),
         )
         return
 

@@ -119,8 +119,11 @@ environment:
 - 兼容 `POST /v1/images/edits` 图片编辑接口
 - 兼容面向图片场景的 `POST /v1/chat/completions`
 - 兼容面向图片场景的 `POST /v1/responses`
-- `GET /v1/models` 返回 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、
-  `gpt-5-mini`
+- `GET /v1/models` 动态返回匿名能力与每个有效账号模型目录的并集；显式调用某个模型时，只会选择实际提供该模型的账号
+- GPT-5.6 将模型与推理模式分开：Free Web 展示 `gpt-5.6-luna`，Team Web 展示 `gpt-5.6-sol`，Work Mode 单独展示
+  `gpt-5.6-luna-wm`、`gpt-5.6-terra-wm`、`gpt-5.6-sol-wm`
+- `instant` / `thinking` 通过 `reasoning_effort` 选择，Pro 通过 Responses API 的 `reasoning.mode: "pro"` 选择；旧模式名称和 ChatGPT
+  内部 slug 仍可作为兼容输入，但不再出现在模型目录中
 - 支持通过 `n` 返回多张生成结果
 - 支持生成可编辑 PPT 文件
 - 支持生成可编辑 PSD 文件
@@ -130,7 +133,7 @@ environment:
 ### 在线画图功能
 
 - 内置在线画图工作台，支持生成、图片编辑与多图组图编辑
-- 支持 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini` 模型选择
+- 图片工作台从 `/v1/models` 动态加载当前账号池实际可用的图片模型
 - 编辑模式支持参考图上传
 - 前端支持多图生成交互
 - 本地保存图片会话历史，支持回看、删除和清空
@@ -183,7 +186,7 @@ Authorization: Bearer <auth-key>
 <summary><code>GET /v1/models</code></summary>
 <br>
 
-返回当前暴露的图片模型列表。
+返回匿名能力与所有有效账号当前可用模型的并集。
 
 ```bash
 curl http://localhost:8000/v1/models \
@@ -194,10 +197,10 @@ curl http://localhost:8000/v1/models \
 <summary>说明</summary>
 <br>
 
-| 字段   | 说明                                                                                                         |
-|:-----|:-----------------------------------------------------------------------------------------------------------|
-| 返回模型 | `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini` |
-| 接入场景 | 可接入 Cherry Studio、New API 等上游或客户端                                                                          |
+| 字段   | 说明                                                                                                      |
+|:-----|:--------------------------------------------------------------------------------------------------------|
+| 返回模型 | 以当前账号池实际能力为准；GPT-5.6 会按 Web/Work Mode 展示规范化的 Luna、Terra、Sol 名称，不展示 instant/thinking/pro 模式别名 |
+| 接入场景 | 可接入 Cherry Studio、New API 等上游或客户端                                                                       |
 
 <br>
 </details>
@@ -294,14 +297,14 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <auth-key>" \
   -d '{
-    "model": "gpt-image-2",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
     "messages": [
       {
         "role": "user",
-        "content": "生成一张雨夜东京街头的赛博朋克猫"
+        "content": "分析这个方案的主要风险"
       }
-    ],
-    "n": 1
+    ]
   }'
 ```
 
@@ -313,6 +316,7 @@ curl http://localhost:8000/v1/chat/completions \
 |:---------------------|:-----------------------------------------------------------------------------|
 | `model`              | 文本、搜索或图片模型；搜索模型会触发网页搜索兼容逻辑                                                   |
 | `messages`           | 消息数组，支持文本、搜索和图片请求内容                                                          |
+| `reasoning_effort`   | 文本推理强度：`none`、`low`、`medium`、`high`、`xhigh`、`max`；`none` 对应 instant，其余显式值对应 thinking |
 | `n`                  | 图片生成数量，按当前实现解析为图片数量                                                          |
 | `stream`             | 文本、搜索和图片场景均支持，仍在测试                                                           |
 | `tools`              | 文本场景支持 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` |
@@ -333,13 +337,12 @@ curl http://localhost:8000/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <auth-key>" \
   -d '{
-    "model": "gpt-5",
-    "input": "生成一张未来感城市天际线图片",
-    "tools": [
-      {
-        "type": "image_generation"
-      }
-    ]
+    "model": "gpt-5.6-sol",
+    "input": "审查这个关键设计决策",
+    "reasoning": {
+      "mode": "pro",
+      "effort": "medium"
+    }
   }'
 ```
 
@@ -347,12 +350,13 @@ curl http://localhost:8000/v1/responses \
 <summary>字段说明</summary>
 <br>
 
-| 字段       | 说明                                                                                      |
-|:---------|:----------------------------------------------------------------------------------------|
-| `model`  | 响应中会回显该模型字段，搜索和图片生成会走对应兼容逻辑                                                             |
-| `input`  | 输入内容；搜索使用最后一条用户文本，图片生成需能解析出提示词                                                          |
-| `tools`  | 支持 `image_generation`、`web_search`、`web_search_preview`、`web_search_preview_2025_03_11` |
-| `stream` | 已实现，但仍在测试                                                                               |
+| 字段          | 说明                                                                                                      |
+|:------------|:--------------------------------------------------------------------------------------------------------|
+| `model`     | 响应中会回显该模型字段，搜索和图片生成会走对应兼容逻辑                                                                         |
+| `input`     | 输入内容；搜索使用最后一条用户文本，图片生成需能解析出提示词                                                                      |
+| `reasoning` | 文本推理设置；`effort` 支持 `none` 至 `max`，`mode: "pro"` 仅在本接口可用且 effort 至少为 `medium`                         |
+| `tools`     | 支持 `image_generation`、`web_search`、`web_search_preview`、`web_search_preview_2025_03_11`             |
+| `stream`    | 已实现，但仍在测试                                                                                               |
 
 <br>
 </details>

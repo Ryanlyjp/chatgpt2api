@@ -8,7 +8,9 @@
 | OpenAI 兼容 `POST /v1/images/edits` | ✅  | 已支持，可上传图片进行编辑。 |
 | 面向图片工作流的 `POST /v1/chat/completions` | ✅  | 已支持图片相关请求。 |
 | 面向图片工作流的 `POST /v1/responses` | ✅  | 已支持图片生成工具调用。 |
-| `GET /v1/models` 接口 | ✅  | 当前返回 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini`。 |
+| `GET /v1/models` 接口 | ✅  | 动态汇总匿名目录与每个有效账号的模型目录；普通 Web 展示 Luna/Sol 基础模型，Work Mode 单独展示 Luna/Terra/Sol，不把 instant、thinking、Pro 误列为独立模型。 |
+| GPT-5.6 推理模式 | ✅  | `reasoning_effort: none` 选择 instant，其他显式 effort 选择 thinking；Responses 支持以 `reasoning.mode: "pro"` 调用 Team Sol 的 Pro 模式。 |
+| 文本模型账号路由 | ✅  | 显式模型和推理模式按逐账号能力目录选择账号，不依赖账号套餐字段；同套餐或套餐误分类时也不会把专有模型发送给无权限账号。 |
 | 同时生成多张图片 | ✅  | 已支持，后端与前端都可进行多图生成。 |
 | 图片并行生成 | ✅  | 多张图片使用独立线程和账号同时生成，可通过 `image_parallel_generation` 配置关闭。 |
 | 图片生成进度追踪 | ✅  | 任务显示当前步骤（上传/预热/获取token/生成中等），支持耗时统计。 |

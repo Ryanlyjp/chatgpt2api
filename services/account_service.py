@@ -1014,11 +1014,11 @@ class AccountService:
                 token
                 for account in self._accounts.values()
                 if account.get("status") not in {"禁用", "异常"}
+                   and (token := account.get("access_token") or "")
                    and (
                        route is None
-                       or self._normalize_account_type(account.get("type")) in route.account_types
+                       or token in route.access_tokens
                    )
-                   and (token := account.get("access_token") or "")
                    and token not in excluded
             ]
             if not candidates:

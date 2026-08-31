@@ -78,6 +78,13 @@ class ChatCompletionCacheTests(unittest.TestCase):
         self.assertNotEqual(default_key, reasoning_key)
         self.assertNotEqual(thinking_key, reasoning_key)
 
+    def test_reasoning_effort_normalization_preserves_none_and_max(self) -> None:
+        for protocol in (openai_v1_chat_complete, openai_v1_response):
+            with self.subTest(protocol=protocol.__name__):
+                self.assertEqual(protocol.normalize_thinking_effort("none"), "none")
+                self.assertEqual(protocol.normalize_thinking_effort("max"), "max")
+                self.assertEqual(protocol.normalize_thinking_effort("xhigh"), "xhigh")
+
     def test_chat_completion_reasoning_effort_reaches_conversation_request(self) -> None:
         captured_efforts: list[str] = []
 
@@ -97,7 +104,7 @@ class ChatCompletionCacheTests(unittest.TestCase):
         ):
             openai_v1_chat_complete.handle(body)
 
-        self.assertEqual(captured_efforts, ["extended"])
+        self.assertEqual(captured_efforts, ["xhigh"])
 
     def test_responses_reasoning_effort_reaches_conversation_request(self) -> None:
         captured_efforts: list[str] = []
@@ -118,7 +125,7 @@ class ChatCompletionCacheTests(unittest.TestCase):
         ):
             openai_v1_response.handle(body)
 
-        self.assertEqual(captured_efforts, ["extended"])
+        self.assertEqual(captured_efforts, ["xhigh"])
 
     def test_repeated_stream_text_completion_replays_cached_chunks(self) -> None:
         calls = 0

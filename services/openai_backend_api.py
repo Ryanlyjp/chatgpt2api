@@ -512,10 +512,14 @@ class OpenAIBackendAPI:
         normalized = str(value or "").strip().lower()
         if normalized in {"", "none", "auto"}:
             return ""
-        if normalized in {"low", "medium", "high", "standard", "max"}:
-            return normalized
-        if normalized in {"xhigh", "extended"}:
+        if normalized in {"low", "min"}:
+            return "min"
+        if normalized in {"medium", "standard"}:
+            return "standard"
+        if normalized in {"high", "extended"}:
             return "extended"
+        if normalized in {"xhigh", "max"}:
+            return "max"
         return ""
 
     def _conversation_payload(
@@ -557,6 +561,10 @@ class OpenAIBackendAPI:
             },
         }
         normalized_effort = self._normalize_thinking_effort(thinking_effort or config.default_thinking_effort)
+        if model == "gpt-5-6-pro":
+            normalized_effort = "standard"
+        elif not normalized_effort and model.endswith(("-thinking", "-t-mini", "-wm")):
+            normalized_effort = "standard"
         if normalized_effort:
             payload["thinking_effort"] = normalized_effort
         return payload
@@ -2582,10 +2590,50 @@ class OpenAIBackendAPI:
             stream=True,
         )
         ensure_ok(response, path)
+        resume_conversation_id = ""
+        resume_token = ""
+        resume_requested = False
         try:
-            yield from iter_sse_payloads(response)
+            for event_payload in iter_sse_payloads(response):
+                if event_payload == "[DONE]":
+                    if resume_requested and resume_conversation_id and resume_token:
+                        break
+                    yield event_payload
+                    continue
+                try:
+                    event = json.loads(event_payload)
+                except json.JSONDecodeError:
+                    event = {}
+                if event.get("type") == "resume_conversation_token":
+                    resume_conversation_id = str(event.get("conversation_id") or "")
+                    resume_token = str(event.get("token") or "")
+                elif event.get("type") == "stream_handoff":
+                    options = event.get("options")
+                    resume_requested = isinstance(options, list) and any(
+                        isinstance(option, dict) and option.get("type") == "resume_sse_endpoint"
+                        for option in options
+                    )
+                yield event_payload
         finally:
             response.close()
+
+        if not (resume_requested and resume_conversation_id and resume_token):
+            return
+        resume_path = f"{path.rsplit('/conversation', 1)[0]}/f/conversation/resume"
+        resume_headers = self._conversation_headers(resume_path, requirements)
+        resume_headers["X-Conduit-Token"] = resume_token
+        resumed_response = self.session.post(
+            self.base_url + resume_path,
+            headers=resume_headers,
+            json={"conversation_id": resume_conversation_id, "offset": 0},
+            timeout=300,
+            stream=True,
+        )
+        ensure_ok(resumed_response, resume_path)
+        try:
+            yield from iter_sse_payloads(resumed_response)
+        finally:
+            resumed_response.close()
 
     def _report_progress(self, step: str) -> None:
         """Report progress step to the callback if set."""
@@ -2758,6 +2806,9 @@ class OpenAIBackendAPI:
                 "permission": [],
                 "root": slug,
                 "parent": None,
+                "_chatgpt_title": str(item.get("title") or ""),
+                "_chatgpt_reasoning_type": str(item.get("reasoning_type") or ""),
+                "_chatgpt_is_work_mode_model": bool(item.get("is_work_mode_model")),
             })
         data.sort(key=lambda item: item["id"])
         return {"object": "list", "data": data}

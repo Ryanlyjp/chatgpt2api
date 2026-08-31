@@ -10,20 +10,33 @@ from services.model_service import ModelCatalogService
 from services.storage.json_storage import JSONStorageBackend
 
 
-def model_list(*model_ids: str) -> dict:
+def advertised_model(
+    model_id: str,
+    *,
+    title: str = "",
+    reasoning_type: str = "",
+    is_work_mode_model: bool = False,
+) -> dict:
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": 0,
+        "owned_by": "chatgpt",
+        "permission": [],
+        "root": model_id,
+        "parent": None,
+        "_chatgpt_title": title,
+        "_chatgpt_reasoning_type": reasoning_type,
+        "_chatgpt_is_work_mode_model": is_work_mode_model,
+    }
+
+
+def model_list(*models: str | dict) -> dict:
     return {
         "object": "list",
         "data": [
-            {
-                "id": model_id,
-                "object": "model",
-                "created": 0,
-                "owned_by": "chatgpt",
-                "permission": [],
-                "root": model_id,
-                "parent": None,
-            }
-            for model_id in model_ids
+            advertised_model(model) if isinstance(model, str) else model
+            for model in models
         ],
     }
 
@@ -57,7 +70,7 @@ class ModelCatalogServiceTests(unittest.TestCase):
             [
                 {"access_token": "free-bad", "type": "free", "status": "正常"},
                 {"access_token": "free-good", "type": "FREE", "status": "正常"},
-                {"access_token": "plus", "type": "Plus", "status": "正常"},
+                {"access_token": "plus", "type": "free", "status": "正常"},
                 {"access_token": "pro", "type": "pro", "status": "正常"},
                 {"access_token": "team-disabled", "type": "Team", "status": "禁用"},
             ]
@@ -82,7 +95,7 @@ class ModelCatalogServiceTests(unittest.TestCase):
             clock=lambda: self.now,
         )
 
-    def test_catalog_unions_anonymous_and_each_active_account_type(self) -> None:
+    def test_catalog_unions_anonymous_and_every_active_account(self) -> None:
         result = self.catalog.list_models()
 
         self.assertEqual(
@@ -94,12 +107,117 @@ class ModelCatalogServiceTests(unittest.TestCase):
         self.assertNotIn("team-disabled", self.calls)
 
         pro_route = self.catalog.route_for_model("pro-only")
-        self.assertEqual(pro_route.account_types, frozenset({"Pro"}))
+        self.assertEqual(pro_route.access_tokens, frozenset({"pro"}))
         self.assertFalse(pro_route.allow_anonymous)
 
         shared_route = self.catalog.route_for_model("shared")
-        self.assertEqual(shared_route.account_types, frozenset({"free", "Plus"}))
+        self.assertEqual(shared_route.access_tokens, frozenset({"free-good", "plus"}))
         self.assertTrue(shared_route.allow_anonymous)
+
+    def test_gpt_5_6_names_and_routes_follow_each_accounts_metadata(self) -> None:
+        self.outcomes["free-good"] = model_list(
+            advertised_model("gpt-5-6", title="GPT-5.6 Luna", reasoning_type="auto"),
+            advertised_model("gpt-5-6-mini", title="GPT-5.6 Luna", reasoning_type="none"),
+            advertised_model("gpt-5-6-t-mini", title="GPT-5.6 Luna", reasoning_type="reasoning"),
+        )
+        self.outcomes["plus"] = model_list(
+            advertised_model("gpt-5-6", title="GPT-5.6 Sol", reasoning_type="auto"),
+            advertised_model("gpt-5-6-instant", title="GPT-5.6 Sol", reasoning_type="none"),
+            advertised_model("gpt-5-6-thinking", title="GPT-5.6 Sol", reasoning_type="reasoning"),
+            advertised_model("gpt-5-6-pro", title="GPT-5.6 Pro", reasoning_type="pro"),
+            advertised_model(
+                "gpt-5.6-luna-wm",
+                title="GPT-5.6 Luna",
+                reasoning_type="reasoning",
+                is_work_mode_model=True,
+            ),
+            advertised_model(
+                "gpt-5.6-terra-wm",
+                title="GPT-5.6 Terra",
+                reasoning_type="reasoning",
+                is_work_mode_model=True,
+            ),
+            advertised_model(
+                "gpt-5.6-sol-wm",
+                title="GPT-5.6 Sol",
+                reasoning_type="reasoning",
+                is_work_mode_model=True,
+            ),
+        )
+
+        result = self.catalog.list_models()
+        model_ids = {item["id"] for item in result["data"]}
+
+        self.assertTrue({
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-luna-wm",
+            "gpt-5.6-terra-wm",
+            "gpt-5.6-sol-wm",
+        }.issubset(model_ids))
+        self.assertNotIn("gpt-5.6-luna-instant", model_ids)
+        self.assertNotIn("gpt-5.6-luna-thinking", model_ids)
+        self.assertNotIn("gpt-5.6-sol-instant", model_ids)
+        self.assertNotIn("gpt-5.6-sol-thinking", model_ids)
+        self.assertNotIn("gpt-5.6-pro", model_ids)
+        self.assertNotIn("gpt-5-6", model_ids)
+        self.assertNotIn("gpt-5-6-mini", model_ids)
+        self.assertEqual(
+            self.catalog.route_for_model("gpt-5.6-luna").access_tokens,
+            frozenset({"free-good"}),
+        )
+        self.assertEqual(
+            self.catalog.route_for_model("gpt-5.6-sol").access_tokens,
+            frozenset({"plus"}),
+        )
+        self.assertEqual(
+            self.catalog.route_for_model("gpt-5.6-sol-thinking").access_tokens,
+            frozenset({"plus"}),
+        )
+        self.assertEqual(
+            self.catalog.route_for_model("gpt-5.6-pro").access_tokens,
+            frozenset({"plus"}),
+        )
+        self.assertEqual(
+            self.catalog.route_for_model("gpt-5-6").access_tokens,
+            frozenset({"free-good", "plus"}),
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-luna", "free-good"),
+            "gpt-5-6",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-luna", "free-good", "none"),
+            "gpt-5-6-mini",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-luna", "free-good", "high"),
+            "gpt-5-6-t-mini",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-sol", "plus", "none"),
+            "gpt-5-6-instant",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-sol", "plus", "high"),
+            "gpt-5-6-thinking",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-sol", "plus", "medium", "pro"),
+            "gpt-5-6-pro",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-sol-wm", "plus", "high"),
+            "gpt-5.6-sol-wm",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5.6-sol-thinking", "plus"),
+            "gpt-5-6-thinking",
+        )
+        self.assertEqual(
+            self.catalog.upstream_model_for("gpt-5-6", "plus"),
+            "gpt-5-6",
+        )
 
     def test_catalog_is_cached_until_ttl_expires(self) -> None:
         self.catalog.list_models()
@@ -128,8 +246,8 @@ class ModelCatalogServiceTests(unittest.TestCase):
 
         self.assertIn("pro-only", {item["id"] for item in result["data"]})
         self.assertEqual(
-            self.catalog.route_for_model("pro-only").account_types,
-            frozenset({"Pro"}),
+            self.catalog.route_for_model("pro-only").access_tokens,
+            frozenset({"pro"}),
         )
         self.assertEqual(self.calls.count("pro"), 2)
 
@@ -141,7 +259,7 @@ class ModelCatalogServiceTests(unittest.TestCase):
 
         self.assertNotIn("pro-only", {item["id"] for item in result["data"]})
         self.assertEqual(
-            self.catalog.route_for_model("pro-only").account_types,
+            self.catalog.route_for_model("pro-only").access_tokens,
             frozenset(),
         )
 

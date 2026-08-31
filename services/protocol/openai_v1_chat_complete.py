@@ -46,11 +46,13 @@ TOOL_UNAVAILABLE_SYSTEM_MESSAGE = (
 
 def normalize_thinking_effort(value: object) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"", "none"}:
+    if not normalized:
         return ""
-    if normalized in {"low", "medium", "high"}:
+    if normalized in {"none", "low", "medium", "high", "max"}:
         return normalized
-    if normalized in {"xhigh", "extended"}:
+    if normalized == "xhigh":
+        return "xhigh"
+    if normalized == "extended":
         return "extended"
     return ""
 
@@ -64,6 +66,16 @@ def thinking_effort_from_body(body: dict[str, Any]) -> str:
     if isinstance(reasoning, dict):
         return normalize_thinking_effort(reasoning.get("effort"))
     return ""
+
+
+def validate_reasoning_mode(body: dict[str, Any]) -> None:
+    reasoning = body.get("reasoning")
+    mode = str(reasoning.get("mode") or "").strip().lower() if isinstance(reasoning, dict) else ""
+    if mode == "pro":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "reasoning.mode=pro is only supported by /v1/responses"},
+        )
 
 
 def completion_chunk(model: str, delta: dict[str, Any], finish_reason: str | None = None, completion_id: str = "", created: int | None = None) -> dict[str, Any]:
@@ -293,24 +305,34 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         model, messages = text_chat_parts(body)
         if is_web_search_chat_request(body) and not has_unsupported_tools(body, WEB_SEARCH_TOOL_TYPES):
             return stream_web_search_chat_completion(messages, model)
+        validate_reasoning_mode(body)
         thinking_effort = thinking_effort_from_body(body)
         key = cache_key(body, messages, stream=True)
         return chat_completion_cache.get_or_compute_stream(
             key,
-            lambda: stream_text_chat_completion(text_backend(model), messages, model, thinking_effort),
+            lambda: stream_text_chat_completion(
+                text_backend(model, thinking_effort),
+                messages,
+                model,
+                thinking_effort,
+            ),
         )
     if is_image_chat_request(body):
         return image_chat_response(body)
     model, messages = text_chat_parts(body)
     if is_web_search_chat_request(body) and not has_unsupported_tools(body, WEB_SEARCH_TOOL_TYPES):
         return web_search_chat_response(messages, model)
+    validate_reasoning_mode(body)
     thinking_effort = thinking_effort_from_body(body)
     key = cache_key(body, messages, stream=False)
     return chat_completion_cache.get_or_compute_response(
         key,
         lambda: completion_response(
             model,
-            collect_text(text_backend(model), ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)),
+            collect_text(
+                text_backend(model, thinking_effort),
+                ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort),
+            ),
             messages=messages,
         ),
     )
