@@ -255,17 +255,14 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     await submitTokens(splitTokens(tokenInput), "Access Token 导入完成");
   };
 
-  // 起授权：拿 authorize URL，立刻在新窗口打开，方便用户登录
+  // 起授权：只生成 authorize URL，由用户复制或主动打开
   const handleStartOAuth = async () => {
     setOauthStarting(true);
     try {
       const data = await startOAuthLogin(oauthEmailHint.trim());
       setOauthSession(data);
       setOauthCallbackInput("");
-      if (typeof window !== "undefined") {
-        window.open(data.authorize_url, "_blank", "noopener,noreferrer");
-      }
-      toast.success("已打开 OpenAI 授权页面，请在登录后复制 callback URL 回来");
+      toast.success("授权地址已生成，请复制后在登录浏览器中打开");
     } catch (error) {
       const message = error instanceof Error ? error.message : "OAuth 起始失败";
       toast.error(message);
@@ -277,7 +274,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
   // 用粘贴回来的 callback URL 完成换 token + 落盘
   const handleFinishOAuth = async () => {
     if (!oauthSession) {
-      toast.error("请先点击\"打开授权页面\"获取 session");
+      toast.error("请先生成授权地址");
       return;
     }
     const trimmed = oauthCallbackInput.trim();
@@ -557,7 +554,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
             <div className="font-medium text-stone-800">操作步骤</div>
             <ol className="list-decimal pl-5 space-y-1">
               <li>（可选）填写你 ChatGPT 账号的邮箱，登录页会预填。</li>
-              <li>点击下方"打开授权页面"，在新标签里登录自己的 ChatGPT 账号。</li>
+              <li>点击下方"生成授权地址"，复制地址后在用于登录的浏览器中打开。</li>
               <li>登录完成后浏览器会跳到 <code className="rounded bg-stone-200 px-1">platform.openai.com/auth/callback?code=...</code>。立刻从地址栏复制整段 URL（或开 F12 在 Network 里抓到 callback 那一行，右键 Copy → Copy URL）。</li>
               <li>把 callback URL 粘到下面输入框，点"完成导入"。</li>
             </ol>
@@ -580,8 +577,8 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
               onClick={() => void handleStartOAuth()}
               disabled={oauthStarting}
             >
-              {oauthStarting ? <LoaderCircle className="size-4 animate-spin" /> : <ExternalLink className="size-4" />}
-              打开授权页面
+              {oauthStarting ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+              生成授权地址
             </Button>
           ) : (
             <div className="space-y-3">
@@ -605,7 +602,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
                   onClick={() => window.open(oauthSession.authorize_url, "_blank", "noopener,noreferrer")}
                 >
                   <ExternalLink className="size-4" />
-                  再次打开
+                  打开授权页
                 </Button>
                 <Button
                   type="button"
