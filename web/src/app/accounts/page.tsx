@@ -657,16 +657,12 @@ function AccountsPageContent() {
 
   const handleTestAccountProxy = async () => {
     const candidate = editProxy.trim();
-    if (!candidate) {
-      toast.error("请先填写代理地址");
-      return;
-    }
     setIsTestingProxy(true);
     try {
-      const data = await testProxy(candidate);
+      const data = await testProxy(candidate, true);
       data.result.ok
-        ? toast.success(`代理可用（${data.result.latency_ms} ms，HTTP ${data.result.status}）`)
-        : toast.error(`代理不可用：${data.result.error ?? "未知错误"}`);
+        ? toast.success(`${data.result.has_proxy ? "代理" : "直连"}可用（${data.result.latency_ms} ms，HTTP ${data.result.status}）`)
+        : toast.error(`连接不可用：${data.result.error ?? "未知错误"}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "测试代理失败");
     } finally {

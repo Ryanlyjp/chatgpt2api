@@ -83,11 +83,11 @@ class ProxyRuntimeApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fake_config = FakeConfig()
         self.fake_proxy_settings = FakeProxySettings()
-        self.test_proxy_calls: list[str] = []
+        self.test_proxy_calls: list[tuple[str, bool]] = []
         self.test_clearance_calls: list[str] = []
 
-        def fake_test_proxy(url: str = "") -> dict[str, object]:
-            self.test_proxy_calls.append(url)
+        def fake_test_proxy(url: str = "", *, account_scope: bool = False) -> dict[str, object]:
+            self.test_proxy_calls.append((url, account_scope))
             return {
                 "ok": True,
                 "status": 204,
@@ -131,7 +131,15 @@ class ProxyRuntimeApiTests(unittest.TestCase):
         payload = response.json()["result"]
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["proxy_source"], "proxy_runtime")
-        self.assertEqual(self.test_proxy_calls, [""])
+        self.assertEqual(self.test_proxy_calls, [("", False)])
+
+    def test_proxy_test_accepts_account_scope(self) -> None:
+        response = self.client.post(
+            "/api/proxy/test", headers=AUTH_HEADERS, json={"url": "", "account_scope": True}
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.test_proxy_calls, [("", True)])
 
     def test_proxy_runtime_endpoint_reads_and_updates_runtime_config(self) -> None:
         get_response = self.client.get("/api/proxy/runtime", headers=AUTH_HEADERS)

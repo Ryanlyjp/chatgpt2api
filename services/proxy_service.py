@@ -541,15 +541,15 @@ def _redact_url_credentials(text: str) -> str:
     )
 
 
-def test_proxy(url: str = "", *, timeout: float = 15.0) -> dict:
+def test_proxy(url: str = "", *, account_scope: bool = False, timeout: float = 15.0) -> dict:
     candidate = normalize_proxy_url(_clean(url))
     proxy_source = "input"
     if not candidate:
-        profile = proxy_settings.get_profile(upstream=True)
+        profile = proxy_settings.get_profile(upstream=not account_scope)
         candidate = profile.proxy_url
         proxy_source = profile.proxy_source
     result_base = {"proxy_source": proxy_source, "has_proxy": bool(candidate)}
-    if not candidate:
+    if not candidate and not account_scope:
         return {
             "ok": False,
             "status": 0,
@@ -557,7 +557,7 @@ def test_proxy(url: str = "", *, timeout: float = 15.0) -> dict:
             "error": "no active proxy configured",
             **result_base,
         }
-    if not _is_valid_proxy_url(candidate):
+    if candidate and not _is_valid_proxy_url(candidate):
         return {
             "ok": False,
             "status": 0,
@@ -565,7 +565,7 @@ def test_proxy(url: str = "", *, timeout: float = 15.0) -> dict:
             "error": "invalid proxy url",
             **result_base,
         }
-    session = Session(impersonate="edge101", verify=True, proxy=candidate)
+    session = Session(impersonate="edge101", verify=True, **({"proxy": candidate} if candidate else {}))
     started = time.perf_counter()
     try:
         response = session.get(

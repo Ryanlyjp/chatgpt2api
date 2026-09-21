@@ -33,6 +33,7 @@ class SettingsUpdateRequest(BaseModel):
 
 class ProxyTestRequest(BaseModel):
     url: str = ""
+    account_scope: bool = False
 
 
 class ClearanceTestRequest(BaseModel):
@@ -140,7 +141,7 @@ def create_router(app_version: str) -> APIRouter:
     @router.post("/api/proxy/test")
     async def test_proxy_endpoint(body: ProxyTestRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        return {"result": await run_in_threadpool(test_proxy, (body.url or "").strip())}
+        return {"result": await run_in_threadpool(test_proxy, (body.url or "").strip(), account_scope=body.account_scope)}
 
     @router.get("/api/proxy/runtime")
     async def get_proxy_runtime_endpoint(authorization: str | None = Header(default=None)):

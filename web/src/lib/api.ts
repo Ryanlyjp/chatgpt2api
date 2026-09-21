@@ -900,10 +900,10 @@ export async function updateProxy(updates: { enabled?: boolean; url?: string }) 
   });
 }
 
-export async function testProxy(url?: string) {
+export async function testProxy(url?: string, accountScope = false) {
   return httpRequest<{ result: ProxyTestResult }>("/api/proxy/test", {
     method: "POST",
-    body: { url: url ?? "" },
+    body: { url: url ?? "", account_scope: accountScope },
   });
 }
 

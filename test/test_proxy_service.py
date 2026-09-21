@@ -13,6 +13,7 @@ from services.proxy_service import (
     FlareSolverrClearanceProvider,
     ProxySettingsStore,
     normalize_proxy_url,
+    test_proxy as check_proxy,
 )
 
 
@@ -38,6 +39,59 @@ def make_runtime(**overrides: object) -> dict[str, object]:
 
 
 class ProxyServiceTests(unittest.TestCase):
+    def test_generic_proxy_test_still_requires_a_proxy(self) -> None:
+        with patch("services.proxy_service.proxy_settings", ProxySettingsStore(FakeConfig())):
+            result = check_proxy("")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "no active proxy configured")
+
+    def test_proxy_test_uses_direct_connection_without_configured_proxy(self) -> None:
+        session_kwargs: list[dict[str, object]] = []
+
+        class FakeSession:
+            def __init__(self, **kwargs: object) -> None:
+                session_kwargs.append(kwargs)
+
+            def get(self, *args: object, **kwargs: object) -> object:
+                return type("Response", (), {"status_code": 200})()
+
+            def close(self) -> None:
+                pass
+
+        with patch("services.proxy_service.proxy_settings", ProxySettingsStore(FakeConfig())), patch(
+            "services.proxy_service.Session", FakeSession
+        ):
+            result = check_proxy("", account_scope=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["proxy_source"], "direct")
+        self.assertFalse(result["has_proxy"])
+        self.assertEqual(session_kwargs, [{"impersonate": "edge101", "verify": True}])
+
+    def test_proxy_test_uses_global_proxy_when_input_is_empty(self) -> None:
+        session_kwargs: list[dict[str, object]] = []
+
+        class FakeSession:
+            def __init__(self, **kwargs: object) -> None:
+                session_kwargs.append(kwargs)
+
+            def get(self, *args: object, **kwargs: object) -> object:
+                return type("Response", (), {"status_code": 200})()
+
+            def close(self) -> None:
+                pass
+
+        runtime = make_runtime(enabled=True, egress_mode="single_proxy", proxy_url="http://runtime.example:8080")
+        store = ProxySettingsStore(FakeConfig(legacy_proxy="http://global.example:8080", runtime=runtime))
+        with patch("services.proxy_service.proxy_settings", store), patch("services.proxy_service.Session", FakeSession):
+            result = check_proxy("", account_scope=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["proxy_source"], "global")
+        self.assertTrue(result["has_proxy"])
+        self.assertEqual(session_kwargs[0]["proxy"], "http://global.example:8080")
+
     def test_normalize_proxy_url_strips_and_converts_socks_schemes(self) -> None:
         self.assertEqual(normalize_proxy_url("  http://proxy.example:8080  "), "http://proxy.example:8080")
         self.assertEqual(normalize_proxy_url("\thttps://proxy.example:8443\n"), "https://proxy.example:8443")
